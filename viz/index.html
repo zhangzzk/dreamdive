@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>柴桑社会关系图</title>
+    <link rel="stylesheet" href="/viz/styles.css" />
+  </head>
+  <body>
+    <div class="bg-grid"></div>
+    <main class="layout">
+      <header class="hero">
+        <p class="eyebrow">AI 社会世界模拟器</p>
+        <h1>柴桑关系观测台</h1>
+        <p class="subtitle">
+          观察角色特征、关系变化与事件发展。
+        </p>
+      </header>
+
+      <section class="controls card">
+        <label for="tickRange">时间步</label>
+        <input id="tickRange" type="range" min="0" max="3" value="0" />
+        <span id="tickLabel">时间步 0</span>
+        <label for="metricSelect">关系维度</label>
+        <select id="metricSelect">
+          <option value="trust">信任</option>
+          <option value="respect">尊重</option>
+          <option value="fear">恐惧</option>
+          <option value="resentment">怨恨</option>
+          <option value="obligation">义务</option>
+          <option value="attraction">吸引</option>
+        </select>
+        <button id="backButton" type="button">上一步</button>
+        <button id="stepButton" type="button">下一步</button>
+        <button id="resetButton" type="button">重置世界</button>
+      </section>
+
+      <section class="grid">
+        <article class="card graph-card">
+          <h2>关系网络图</h2>
+          <svg id="graph" viewBox="0 0 920 600" role="img" aria-label="角色关系网络图"></svg>
+        </article>
+
+        <article class="card inspector-card">
+          <h2>角色面板</h2>
+          <div id="agentInspector" class="inspector"></div>
+        </article>
+      </section>
+
+      <section class="timeline-grid">
+        <article class="card">
+          <h2>事件</h2>
+          <ul id="eventList" class="timeline"></ul>
+        </article>
+        <article class="card">
+          <h2>叙事场景</h2>
+          <ul id="sceneList" class="timeline"></ul>
+        </article>
+      </section>
+    </main>
+
+    <script type="module" src="/viz/app.js"></script>
+  </body>
+</html>

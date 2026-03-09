@@ -1,0 +1,227 @@
+:root {
+  --bg-top: #efe6d7;
+  --bg-bottom: #d8d2c5;
+  --ink: #232120;
+  --ink-soft: #5f5852;
+  --card: rgba(247, 243, 236, 0.9);
+  --line: #b2a89a;
+  --accent: #9e4128;
+  --accent-soft: #de8f5f;
+  --good: #2d7f5e;
+  --bad: #a1302d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, serif;
+  color: var(--ink);
+  background: linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+  min-height: 100vh;
+}
+
+.bg-grid {
+  position: fixed;
+  inset: 0;
+  background-image: radial-gradient(circle at 1px 1px, rgba(35, 33, 32, 0.06) 1px, transparent 0);
+  background-size: 22px 22px;
+  pointer-events: none;
+}
+
+.layout {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 28px 24px 36px;
+  display: grid;
+  gap: 16px;
+}
+
+.hero h1 {
+  margin: 0 0 8px;
+  font-size: clamp(1.6rem, 3vw, 2.5rem);
+  letter-spacing: 0.01em;
+}
+
+.eyebrow {
+  margin: 0;
+  font-size: 0.82rem;
+  letter-spacing: 0.2em;
+  color: var(--accent);
+  font-family: "Avenir Next Condensed", "Futura", "Gill Sans", sans-serif;
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--ink-soft);
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.06);
+  backdrop-filter: blur(2px);
+}
+
+.controls {
+  padding: 12px 14px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: auto 1fr auto auto auto auto auto;
+  align-items: center;
+}
+
+.controls label {
+  font-family: "Avenir Next Condensed", "Futura", "Gill Sans", sans-serif;
+  color: var(--ink-soft);
+}
+
+#tickRange {
+  width: 100%;
+}
+
+#tickLabel {
+  min-width: 120px;
+  font-variant-numeric: tabular-nums;
+}
+
+select {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: #f9f5ee;
+}
+
+button {
+  border: 1px solid #9d8a72;
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: linear-gradient(180deg, #fbf6ee, #ece1d1);
+  color: #3b3229;
+  cursor: pointer;
+  font-family: "Avenir Next Condensed", "Futura", "Gill Sans", sans-serif;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 2fr 1fr;
+}
+
+.graph-card,
+.inspector-card {
+  padding: 12px;
+}
+
+h2 {
+  margin: 4px 6px 10px;
+  font-size: 1.08rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-family: "Avenir Next Condensed", "Futura", "Gill Sans", sans-serif;
+  color: var(--accent);
+}
+
+#graph {
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: linear-gradient(170deg, rgba(255, 250, 245, 0.9), rgba(245, 236, 225, 0.9));
+}
+
+.inspector {
+  padding: 6px 8px 10px;
+  display: grid;
+  gap: 10px;
+  font-size: 0.96rem;
+}
+
+.agent-name {
+  margin: 0;
+  font-size: 1.35rem;
+}
+
+.muted {
+  color: var(--ink-soft);
+}
+
+.pill {
+  display: inline-block;
+  border: 1px solid var(--line);
+  padding: 2px 7px;
+  border-radius: 999px;
+  margin-right: 6px;
+  margin-bottom: 6px;
+  font-size: 0.85rem;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 5px 10px;
+  font-size: 0.9rem;
+}
+
+.timeline-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.timeline-grid .card {
+  padding: 10px 14px 12px;
+}
+
+.timeline {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 250px;
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+}
+
+.timeline li {
+  border-left: 3px solid var(--line);
+  padding: 6px 8px;
+  background: rgba(255, 252, 247, 0.85);
+}
+
+.timeline .time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+
+.relation-pos {
+  color: var(--good);
+}
+
+.relation-neg {
+  color: var(--bad);
+}
+
+@media (max-width: 1000px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .timeline-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .controls {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+}
