@@ -17,11 +17,11 @@ async function fetchWithTimeout(url, init, timeoutMs) {
   }
 }
 
-async function sendChatRequest(config, messages, temperature) {
+async function sendChatRequest(config, messages, temperature, maxTokens) {
   const body = {
     model: config.model,
     messages,
-    max_tokens: config.maxTokens,
+    max_tokens: Number.isFinite(maxTokens) ? maxTokens : config.maxTokens,
   };
   if (Number.isFinite(temperature)) {
     body.temperature = temperature;
@@ -56,7 +56,7 @@ function shouldSwitchToFallback(error) {
   const message = String(error?.message ?? error);
   return isTimeoutError(message)
     || isHttpError(message)
-    || /LLM_REQUEST_EXHAUSTED/i.test(message)
+    || /LLM_REQUEST_EXHAUSTED|LLM_OUTPUT_TRUNCATED/i.test(message)
     || /fetch failed|network|ECONN|ENOTFOUND/i.test(message);
 }
 
@@ -68,6 +68,7 @@ async function requestWithSingleConfig(config, messages) {
   ];
   const maxAttempts = Math.max(1, Number(config.retryCount ?? 2));
   const baseBackoffMs = Math.max(0, Number(config.retryBackoffMs ?? 600));
+  let currentMaxTokens = Math.max(1, Number(config.maxTokens ?? 900));
 
   if (config.debug) {
     const initial = Number.isFinite(attemptTemperatures[0]) ? String(attemptTemperatures[0]) : "unset";
@@ -76,7 +77,7 @@ async function requestWithSingleConfig(config, messages) {
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      let response = await sendChatRequest(config, messages, attemptTemperatures[0]);
+      let response = await sendChatRequest(config, messages, attemptTemperatures[0], currentMaxTokens);
       let errorBody = response.ok ? "" : await response.text();
 
       if (!response.ok && response.status === 400 && /invalid temperature/i.test(errorBody)) {
@@ -84,7 +85,7 @@ async function requestWithSingleConfig(config, messages) {
           console.log("[llm] invalid temperature detected, retrying with compatible settings");
         }
         for (const temperature of attemptTemperatures.slice(1)) {
-          response = await sendChatRequest(config, messages, temperature);
+          response = await sendChatRequest(config, messages, temperature, currentMaxTokens);
           errorBody = response.ok ? "" : await response.text();
           if (response.ok || !/invalid temperature/i.test(errorBody)) {
             break;
@@ -108,15 +109,35 @@ async function requestWithSingleConfig(config, messages) {
 
       const data = await response.json();
       const choice = data?.choices?.[0];
+      const content = choice?.message?.content;
+      const textContent = typeof content === "string"
+        ? content
+        : Array.isArray(content)
+          ? content.map((item) => item?.text ?? "").join("\n")
+          : "";
+
       if (choice?.finish_reason === "length") {
+        if (attempt < maxAttempts) {
+          const nextMax = Math.min(32000, Math.max(currentMaxTokens + 256, Math.floor(currentMaxTokens * 1.6)));
+          if (config.debug) {
+            console.log(`[llm] output truncated, retry ${attempt + 1}/${maxAttempts} with max_tokens=${nextMax}`);
+          }
+          currentMaxTokens = nextMax;
+          const sleepMs = baseBackoffMs * 2 ** (attempt - 1);
+          await delay(sleepMs);
+          continue;
+        }
+        if (textContent.trim()) {
+          if (config.debug) {
+            console.log("[llm] output truncated on final attempt, returning partial content for downstream recovery");
+          }
+          return textContent;
+        }
         throw new Error("LLM_OUTPUT_TRUNCATED");
       }
-      const content = choice?.message?.content;
-      if (typeof content === "string") {
-        return content;
-      }
-      if (Array.isArray(content)) {
-        return content.map((item) => item?.text ?? "").join("\n");
+
+      if (textContent) {
+        return textContent;
       }
       throw new Error("LLM_EMPTY_CONTENT");
     } catch (error) {

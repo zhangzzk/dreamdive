@@ -21,6 +21,14 @@ function completeMemory(partial = {}) {
   return Object.fromEntries(MEMORY_KEYS.map((key) => [key, [...(partial[key] ?? [])]]));
 }
 
+
+function clonePlainObject(input = {}) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return {};
+  }
+  return Object.fromEntries(Object.entries(input));
+}
+
 export function createAgentState(agent) {
   assert(agent?.id, "Agent requires an id.");
   assert(agent?.name, `Agent ${agent.id} requires a name.`);
@@ -78,6 +86,15 @@ export function createAgentState(agent) {
       hiddenWorry: String(agent.profile?.hiddenWorry ?? ""),
       habit: String(agent.profile?.habit ?? ""),
       privateGoal: String(agent.profile?.privateGoal ?? ""),
+    },
+    domain: {
+      traits: clonePlainObject(agent.domain?.traits),
+      states: clonePlainObject(agent.domain?.states),
+      resources: clonePlainObject(agent.domain?.resources),
+      capabilities: clonePlainObject(agent.domain?.capabilities),
+      relations: clonePlainObject(agent.domain?.relations),
+      publicAxes: clonePlainObject(agent.domain?.publicAxes),
+      extra: clonePlainObject(agent.domain?.extra),
     },
     memory: completeMemory(agent.memory),
     currentGoal: agent.currentGoal ?? null,

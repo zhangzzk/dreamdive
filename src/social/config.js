@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { createRandomFn } from "./random.js";
+import { loadSimulationFramework } from "./framework.js";
 
 function requireValue(value, key) {
   if (!value) {
@@ -117,6 +118,8 @@ export function loadSocialConfig() {
   const traceRunDir = path.join(traceRoot, traceRunId);
   const randomSeed = process.env.SIM_RANDOM_SEED ?? "";
   const randomFn = createRandomFn(randomSeed);
+  const frameworkPath = process.env.SIM_FRAMEWORK_FILE ?? path.join(process.cwd(), "config", "simulation-framework.json");
+  const frameworkLoaded = loadSimulationFramework(frameworkPath, process.env.DEBUG_MODE === "1");
 
   const config = {
     steps: Number(process.env.SIM_STEPS ?? 8),
@@ -126,6 +129,7 @@ export function loadSocialConfig() {
     llmConcurrency: Math.max(1, Number(process.env.SIM_LLM_CONCURRENCY ?? 4)),
     orchestrationMode: process.env.SIM_ORCHESTRATION_MODE ?? "hierarchical",
     dbPath: process.env.SIM_DB_PATH ?? path.join(os.tmpdir(), "world-simulator", "sim.db"),
+    bootstrapCacheEnabled: (process.env.SIM_BOOTSTRAP_CACHE ?? "1") !== "0",
     historyDir: process.env.SIM_HISTORY_DIR ?? "",
     randomSeed,
     randomFn,
@@ -134,6 +138,9 @@ export function loadSocialConfig() {
       battleNoise: Math.max(0, Number(process.env.SIM_BATTLE_NOISE ?? 0.2)),
     },
     debug: process.env.DEBUG_MODE === "1",
+    frameworkPath: frameworkLoaded.path,
+    frameworkLoaded: frameworkLoaded.loaded,
+    framework: frameworkLoaded.framework,
     llm: {
       enabled: true,
       apiKey: requireValue(apiKey, "LLM_API_KEY or OPENAI_API_KEY"),
@@ -156,6 +163,7 @@ export function loadSocialConfig() {
       debug: process.env.DEBUG_MODE === "1",
       traceEnabled,
       traceRunDir,
+      framework: frameworkLoaded.framework,
       fallback: selectedFallbackProfile
         ? {
             name: selectedFallbackProfile.name,

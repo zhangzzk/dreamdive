@@ -1,6 +1,7 @@
 import { cloneWorldState, validateWorldState } from "../model.js";
 import { planActionWithLLM } from "./actionPlanner.js";
 import { advanceSocialTime, applyPlannedAction } from "./stateUpdater.js";
+import { rolePriorityByKeywords } from "./framework.js";
 
 function shuffle(input, randomFn = Math.random) {
   const array = [...input];
@@ -11,24 +12,17 @@ function shuffle(input, randomFn = Math.random) {
   return array;
 }
 
-function rolePriority(agent) {
-  const role = String(agent.identity?.role ?? "");
-  if (/吴主|丞相|将军/.test(role)) {
-    return 0.16;
-  }
-  if (/都督|军师|谋臣/.test(role)) {
-    return 0.12;
-  }
-  return 0.06;
+function rolePriority(agent, framework) {
+  return rolePriorityByKeywords(agent.identity?.role, framework);
 }
 
-function shouldAgentAct(agent, baseRatio, randomFn = Math.random) {
+function shouldAgentAct(agent, baseRatio, framework, randomFn = Math.random) {
   const stressBoost = Math.max(0, agent.internalState.stress) * 0.15;
   const fatiguePenalty = agent.internalState.fatigue * 0.2;
   const confidenceBoost = Math.max(0, agent.internalState.confidence) * 0.06;
   const propensity = Math.max(
     0.08,
-    Math.min(0.95, baseRatio + rolePriority(agent) + stressBoost + confidenceBoost - fatiguePenalty),
+    Math.min(0.95, baseRatio + rolePriority(agent, framework) + stressBoost + confidenceBoost - fatiguePenalty),
   );
   return randomFn() < propensity;
 }
@@ -51,7 +45,7 @@ async function mapWithConcurrency(items, concurrency, mapper) {
   return results;
 }
 
-function buildPlanningContext(world) {
+function buildPlanningContext(world, framework) {
   const locationIndex = {};
   const factionLeaders = {};
 
@@ -63,7 +57,7 @@ function buildPlanningContext(world) {
     locationIndex[location].push(agent.id);
 
     const faction = agent.identity.faction;
-    if (!factionLeaders[faction] && /(君主|吴主|丞相|将军)/.test(agent.identity.role)) {
+    if (!factionLeaders[faction] && rolePriorityByKeywords(agent.identity.role, framework) >= 0.16) {
       factionLeaders[faction] = agent.id;
     }
   }
@@ -87,7 +81,7 @@ export async function runSocialSimulation(initialWorld, config) {
   const randomFn = config.randomFn ?? Math.random;
 
   for (let step = 0; step < config.steps; step += 1) {
-    const planningContext = buildPlanningContext(world);
+    const planningContext = buildPlanningContext(world, config.framework);
     planningContext.randomFn = randomFn;
     const shuffledIds = shuffle(
       Object.values(world.agents)
@@ -95,7 +89,7 @@ export async function runSocialSimulation(initialWorld, config) {
         .map((agent) => agent.id),
       randomFn,
     );
-    const sampledIds = shuffledIds.filter((id) => shouldAgentAct(world.agents[id], config.activeRatioPerTick, randomFn));
+    const sampledIds = shuffledIds.filter((id) => shouldAgentAct(world.agents[id], config.activeRatioPerTick, config.framework, randomFn));
     const activeAgentIdsRaw = sampledIds.length > 0 ? sampledIds : shuffledIds.slice(0, 1);
     const activeAgentIds =
       config.maxActorsPerTick > 0 ? activeAgentIdsRaw.slice(0, config.maxActorsPerTick) : activeAgentIdsRaw;

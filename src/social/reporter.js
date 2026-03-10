@@ -5,12 +5,21 @@ function factionAggregate(world) {
   for (const agent of Object.values(world.agents)) {
     const faction = agent.identity.faction;
     if (!totals[faction]) {
-      totals[faction] = { troops: 0, influence: 0, confidence: 0, members: 0 };
+      totals[faction] = { confidence: 0, members: 0, resources: {} };
     }
-    totals[faction].troops += agent.resources.troops;
-    totals[faction].influence += agent.resources.influence;
-    totals[faction].confidence += agent.internalState.confidence;
+    totals[faction].confidence += Number(agent.internalState.confidence ?? 0);
     totals[faction].members += 1;
+
+    for (const [key, raw] of Object.entries(agent.resources ?? {})) {
+      if (key === "time") {
+        continue;
+      }
+      const value = Number(raw);
+      if (!Number.isFinite(value)) {
+        continue;
+      }
+      totals[faction].resources[key] = (totals[faction].resources[key] ?? 0) + value;
+    }
   }
   return totals;
 }
@@ -51,12 +60,15 @@ export function printSimulationReport(world, config, runtime) {
   console.log(`总事件数: ${world.eventLog.length}`);
   console.log(`用时: ${runtime}ms`);
   console.log("");
-  console.log("== 阵营态势 ==");
+  console.log("== 群体态势 ==");
   const aggregates = factionAggregate(world);
   for (const [faction, value] of Object.entries(aggregates)) {
     const avgConfidence = value.members ? value.confidence / value.members : 0;
-    console.log(
-      `- ${faction}: 兵力 ${Math.round(value.troops)}, 影响力 ${value.influence.toFixed(2)}, 平均信心 ${avgConfidence.toFixed(2)}`,
-    );
+    const resourceSummary = Object.entries(value.resources ?? {})
+      .sort((left, right) => Math.abs(right[1]) - Math.abs(left[1]))
+      .slice(0, 3)
+      .map(([key, amount]) => `${key}=${Number(amount).toFixed(2)}`)
+      .join(" | ");
+    console.log(`- ${faction}: 成员 ${value.members}, 平均信心 ${avgConfidence.toFixed(2)}${resourceSummary ? `, 资源 ${resourceSummary}` : ""}`);
   }
 }

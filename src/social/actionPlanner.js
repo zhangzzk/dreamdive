@@ -2,6 +2,8 @@ import { requestJsonFromLLM } from "./llmClient.js";
 import { writeLlmTrace } from "./llmTrace.js";
 import { parseJsonLenient } from "./jsonUtil.js";
 import { timelineLabel } from "./timeLabel.js";
+import { resolvePromptLines, resolvePromptText } from "./framework.js";
+import { buildMaterialConstraint } from "./materialContext.js";
 
 const ACTION_SCHEMA = [
   "返回 JSON 对象，字段:",
@@ -21,7 +23,8 @@ const ACTION_SCHEMA = [
   "internal_updates:[{id,mood_delta,stress_delta,fatigue_delta,confidence_delta}],",
   "resource_updates:[{id,money_delta,troops_delta,influence_delta,information_access_delta,time_delta}],",
   "belief_updates:[{id,topic,stance,confidence}],",
-  "public_opinion_updates:{legitimacy_delta,alliance_pressure_delta,court_suspicion_delta,morale_delta}",
+  "public_opinion_updates:{<axis>_delta:number,...},",
+  "domain_updates:[{id:string,container:string,key:string,mode:string,delta:number,value:any}]",
   "}",
 ].join(" ");
 
@@ -86,6 +89,29 @@ function clampDelta(value) {
 
 function normalizeList(input) {
   return Array.isArray(input) ? input : [];
+}
+
+function normalizeOpinionKey(key) {
+  return String(key ?? "")
+    .trim()
+    .replace(/([a-z])([A-Z])/g, "$1_$2")
+    .replace(/\s+/g, "_")
+    .toLowerCase();
+}
+
+function sanitizeOpinionUpdates(input) {
+  const output = {};
+  if (!input || typeof input !== "object") {
+    return output;
+  }
+  for (const [rawKey, rawValue] of Object.entries(input)) {
+    const key = normalizeOpinionKey(rawKey);
+    if (!key) {
+      continue;
+    }
+    output[key] = clampDelta(Number(rawValue ?? 0));
+  }
+  return output;
 }
 
 function sanitizeAction(world, actorId, action) {
@@ -167,12 +193,20 @@ function sanitizeAction(world, actorId, action) {
     }));
 
   const opinion = action?.state_updates?.public_opinion_updates ?? {};
-  const publicOpinionUpdates = {
-    legitimacy_delta: clampDelta(Number(opinion.legitimacy_delta ?? 0)),
-    alliance_pressure_delta: clampDelta(Number(opinion.alliance_pressure_delta ?? 0)),
-    court_suspicion_delta: clampDelta(Number(opinion.court_suspicion_delta ?? 0)),
-    morale_delta: clampDelta(Number(opinion.morale_delta ?? 0)),
-  };
+  const publicOpinionUpdates = sanitizeOpinionUpdates(opinion);
+
+  const domainUpdates = normalizeList(action?.state_updates?.domain_updates)
+    .filter((item) => agentIds.has(item?.id))
+    .slice(0, 20)
+    .map((item) => ({
+      id: String(item.id),
+      container: String(item.container ?? "extra").trim() || "extra",
+      key: String(item.key ?? "").trim(),
+      mode: String(item.mode ?? (item.value !== undefined ? "set" : "delta")).toLowerCase(),
+      delta: Number.isFinite(Number(item.delta)) ? clampDelta(Number(item.delta)) : 0,
+      value: item?.value,
+    }))
+    .filter((item) => item.key);
 
   return {
     actionLabel: String(action.action_label ?? "行动"),
@@ -198,6 +232,7 @@ function sanitizeAction(world, actorId, action) {
       resourceUpdates,
       beliefUpdates,
       publicOpinionUpdates,
+      domainUpdates,
     },
   };
 }
@@ -230,6 +265,9 @@ function buildWorldDigest(world, llmConfig) {
     day: world.time.day,
     phase: world.time.phase,
     opinion: world.publicOpinion,
+    public_axes_schema: world.metadata?.publicAxesSchema ?? {},
+    character_schema: world.metadata?.characterSchema ?? {},
+    world_schema: world.metadata?.worldSchema ?? {},
     phase_brief: world.metadata?.storyPhase ?? "",
     history_brief: buildRollingHistory(world, llmConfig),
     recent_events: world.eventLog.slice(-2).map((event) => ({
@@ -273,6 +311,7 @@ function buildActorDigest(world, actorId, candidateIds = []) {
     drives: actor.drives,
     state: actor.internalState,
     resources: actor.resources,
+    domain: actor.domain ?? {},
     profile: {
       hobbies: actor.profile?.hobbies ?? [],
       dislikes: actor.profile?.dislikes ?? [],
@@ -314,6 +353,7 @@ function buildCandidateIds(world, actorId, planningContext = {}) {
 export function buildActionPromptMessages(world, actorId, randomSignal, planningContext = {}) {
   const actor = world.agents[actorId];
   const llmConfig = planningContext.llmConfig ?? {};
+  const framework = llmConfig.framework ?? {};
   const worldDigest = buildWorldDigest(world, llmConfig);
   const candidateIds = buildCandidateIds(world, actorId, planningContext);
   const actorDigest = buildActorDigest(world, actorId, candidateIds);
@@ -332,31 +372,38 @@ export function buildActionPromptMessages(world, actorId, randomSignal, planning
         resentment: relation.resentment ?? 0,
         obligation: relation.obligation ?? 0,
       },
+      domain: person.domain ?? {},
     };
   });
+
+  const frameworkConstraint = JSON.stringify({
+    world_assumptions: framework.world_assumptions ?? {},
+    style: framework.style ?? {},
+    action_directives: framework.prompt_directives?.action ?? [],
+  });
+  const vars = {
+    speechMaxChars: llmConfig.speechMaxChars ?? 80,
+    summaryMaxChars: llmConfig.summaryMaxChars ?? 120,
+    rationaleMaxChars: llmConfig.rationaleMaxChars ?? 160,
+    frameworkConstraint,
+    materialConstraint: buildMaterialConstraint(world),
+    randomSignal,
+    actorName: actor.name,
+    worldDigest: JSON.stringify(worldDigest),
+    actorDigest: JSON.stringify(actorDigest),
+    localPeople: JSON.stringify(localPeople),
+    currentEvent: JSON.stringify(planningContext.currentEvent ?? {}),
+    ACTION_SCHEMA,
+  };
 
   return [
     {
       role: "system",
-      content:
-        "你是社会模拟层角色行为引擎。基于当前状态产出该角色本回合行动。台词需尽量贴近《三国演义》文风（简短、古雅、合乎身份）。允许出现人物私域因素（爱好、憎恶、家庭牵挂、隐忧、偶然性），但必须服从主线局势，不可喧宾夺主。允许本回合选择不参与公开活动（如休整、独处思考、与无名人士接触），此时 target_ids 可为空。仅输出 JSON，不要 markdown，不要解释。",
+      content: resolvePromptText(framework, "prompts.action.system", vars),
     },
     {
       role: "user",
-      content: [
-        `约束: delta 在 [-0.25, 0.25]；输出单个 JSON 对象；数组字段缺失时返回空数组；speech 控制在 ${llmConfig.speechMaxChars ?? 80} 字内；summary 控制在 ${llmConfig.summaryMaxChars ?? 120} 字内；rationale 控制在 ${llmConfig.rationaleMaxChars ?? 160} 字内。`,
-        "行为表达: 可按情境提供 actions[]（实际行动）与 dialogue[]（多人互动，可多轮）；若本回合以独处、休整或内心判断为主，可为空，不必强求长度或轮次。",
-        "并输出 visibility(0~1)：公开活动取 0.6~1.0，私下或独处活动取 0.1~0.5。",
-        "驱动建议: 主线/战略因素约占 70%-85%，私域因素约占 15%-30%。",
-        `随机信号=${randomSignal}`,
-        `角色=${actor.name}`,
-        `世界=${JSON.stringify(worldDigest)}`,
-        `角色状态=${JSON.stringify(actorDigest)}`,
-        `可互动人物=${JSON.stringify(localPeople)}`,
-        `当前主次事件上下文=${JSON.stringify(planningContext.currentEvent ?? {})}`,
-        "请先给出该角色主观局势判断(subjective_situation)，再给出行动。主观判断允许与客观局势略有偏差。",
-        `Schema=${ACTION_SCHEMA}`,
-      ].join("\n"),
+      content: resolvePromptLines(framework, "prompts.action.user_lines", vars).join("\n"),
     },
   ];
 }
@@ -377,7 +424,7 @@ export async function planActionWithLLM(world, actorId, llmConfig, planningConte
     if (attempt === 1) {
       messages.push({
         role: "user",
-        content: "上一次响应不可用。请仅返回一个合法 JSON 对象，不要附加任何额外文本。字符串不要换行，尽量简短。",
+        content: resolvePromptText(llmConfig.framework ?? {}, "prompts.action.retry_user"),
       });
     }
 
@@ -490,12 +537,12 @@ function buildFallbackAction(world, actorId, raw) {
           targetIds: [targetId],
         }]
       : [],
-    summary: `${actor.name}暂时保持谨慎，优先整理信息并与亲近对象沟通。`,
+    summary: `${actor.name}暂时保持谨慎，优先整理信息并与关键对象核对事实。`,
     rationale: `${reasonTitle}，使用兜底动作继续模拟。原始片段: ${rawText.slice(0, 120)}`,
     subjectiveSituation: {
-      overall: "局势未明，宜暂守观察。",
-      threat: "敌情与盟情均存不确定。",
-      opportunity: "可借稳态争取更多情报。",
+      overall: "信息不完整，先观测再决策。",
+      threat: "关键信息缺口仍在。",
+      opportunity: "通过低风险沟通补齐认知。",
       certainty: 0.35,
       bias: "谨慎偏置",
     },
@@ -517,11 +564,9 @@ function buildFallbackAction(world, actorId, raw) {
       resourceUpdates: [],
       beliefUpdates: [],
       publicOpinionUpdates: {
-        legitimacy_delta: 0,
-        alliance_pressure_delta: 0,
         court_suspicion_delta: 0.01,
-        morale_delta: 0,
       },
+      domainUpdates: [],
     },
   };
 }

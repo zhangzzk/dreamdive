@@ -64,6 +64,15 @@ export function createSimulationDatabase(dbPath) {
       world_json TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS bootstrap_artifacts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      scenario_id TEXT NOT NULL,
+      artifact_type TEXT NOT NULL,
+      artifact_key TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
   `);
   return db;
 }
@@ -137,4 +146,63 @@ export function writeSnapshot(db, runId, step, world) {
     VALUES (?, ?, ?, ?)
   `);
   stmt.run(runId, step, JSON.stringify(world), nowIso());
+}
+
+export function writeBootstrapArtifact(db, scenarioId, artifactType, artifactKey, payload) {
+  const stmt = db.prepare(`
+    INSERT INTO bootstrap_artifacts
+      (scenario_id, artifact_type, artifact_key, payload_json, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  stmt.run(
+    scenarioId,
+    artifactType,
+    artifactKey,
+    JSON.stringify(payload ?? {}),
+    nowIso(),
+  );
+}
+
+
+export function readBootstrapArtifact(db, scenarioId, artifactType, artifactKey) {
+  const stmt = db.prepare(`
+    SELECT payload_json
+    FROM bootstrap_artifacts
+    WHERE scenario_id = ? AND artifact_type = ? AND artifact_key = ?
+    ORDER BY id DESC
+    LIMIT 1
+  `);
+  const row = stmt.get(scenarioId, artifactType, artifactKey);
+  if (!row?.payload_json) {
+    return null;
+  }
+  try {
+    return JSON.parse(row.payload_json);
+  } catch {
+    return null;
+  }
+}
+
+export function listBootstrapArtifactsByKey(db, artifactType, artifactKey, limit = 200) {
+  const stmt = db.prepare(`
+    SELECT scenario_id, payload_json, created_at
+    FROM bootstrap_artifacts
+    WHERE artifact_type = ? AND artifact_key = ?
+    ORDER BY id DESC
+    LIMIT ?
+  `);
+  const rows = stmt.all(artifactType, artifactKey, Math.max(1, Number(limit || 200)));
+  return rows.map((row) => {
+    let payload = null;
+    try {
+      payload = JSON.parse(row.payload_json);
+    } catch {
+      payload = null;
+    }
+    return {
+      scenarioId: row.scenario_id,
+      createdAt: row.created_at,
+      payload,
+    };
+  });
 }

@@ -1,6 +1,8 @@
 import { requestJsonFromLLM } from "./llmClient.js";
 import { parseJsonLenient } from "./jsonUtil.js";
 import { timelineLabel } from "./timeLabel.js";
+import { resolvePromptLines, resolvePromptText } from "./framework.js";
+import { buildMaterialConstraint } from "./materialContext.js";
 
 const PHASES = ["morning", "day", "night"];
 
@@ -129,6 +131,7 @@ function allAgentBriefs(world) {
       hiddenWorry: agent.profile?.hiddenWorry ?? "",
       privateGoal: agent.profile?.privateGoal ?? "",
     },
+    domain: agent.domain ?? {},
     keyRelations: Object.entries(agent.relations)
       .map(([otherId, relation]) => ({
         id: otherId,
@@ -200,31 +203,39 @@ function participantRecentEvents(world, participantIds) {
 
 export async function planMainEvents(world, llmConfig, chatHistory = []) {
   const participantIds = Object.keys(world.agents);
+  const framework = llmConfig.framework ?? {};
   const worldContext = {
     world: worldDigest(world),
     factions: factionDigest(world),
     agents: allAgentBriefs(world),
+    schemas: {
+      character: world.metadata?.characterSchema ?? {},
+      world: world.metadata?.worldSchema ?? {},
+      publicAxes: world.metadata?.publicAxesSchema ?? {},
+    },
+  };
+
+  const frameworkConstraint = JSON.stringify({
+    world_assumptions: framework.world_assumptions ?? {},
+    style: framework.style ?? {},
+    main_event_directives: framework.prompt_directives?.main_event ?? [],
+  });
+  const mainVars = {
+    frameworkConstraint,
+    materialConstraint: buildMaterialConstraint(world),
+    participantIds: JSON.stringify(participantIds),
+    worldContext: JSON.stringify(worldContext),
   };
 
   const messages = [
     {
       role: "system",
-      content:
-        "你是主事件规划器。基于世界状态，规划下一个自适应时间块（可是一日、一周、一个月甚至更久）及其关键事件。事件应自然发生，无则无，不必强求。必须保证时间线连续一致。只输出 JSON。",
+      content: resolvePromptText(framework, "prompts.main_event.system", mainVars),
     },
     ...chatHistory,
     {
       role: "user",
-      content: [
-        "输出 JSON: {\"time_block\":{\"amount\":3,\"unit\":\"day|week\",\"start_phase\":\"morning|day|night\",\"end_phase\":\"morning|day|night\",\"high_density\":false,\"reason\":\"...\"},\"events\":[{\"event_id\":\"e1\",\"title\":\"...\",\"summary\":\"...\",\"participant_ids\":[\"id\"],\"schedule\":{\"offset_days\":0,\"phase\":\"morning|day|night\"}}]}",
-        "要求: 事件数 0~8；participant_ids 必须来自给定列表；允许私下事件（可仅1人）；允许输出空数组表示本时间块无大事。",
-        "time_block 要求: 默认应在 2~7 天（或 1 周）范围自适应选择；仅在确有高密度连续关键事件时，才允许 1 天，并将 high_density 设为 true 且 reason 说明原因。",
-        "规则: 若是公共/政治/军事事件，participant_ids 应尽量包含 2~5 名关键角色；仅在确属私下事件时可为 1 人。",
-        "时间一致性: schedule.offset_days 必须落在 time_block 范围内，并与叙事因果一致。",
-        "节奏: 有时平静、有时集中爆发，避免每个时间步都机械地产生大事件。",
-        `participant_ids=${JSON.stringify(participantIds)}`,
-        `context=${JSON.stringify(worldContext)}`,
-      ].join("\n"),
+      content: resolvePromptLines(framework, "prompts.main_event.user_lines", mainVars).join("\n"),
     },
   ];
 
@@ -249,6 +260,7 @@ export async function planMainEvents(world, llmConfig, chatHistory = []) {
 }
 
 export async function summarizeSubEvent(world, eventPlan, llmConfig) {
+  const framework = llmConfig.framework ?? {};
   const participantIds = Array.from(new Set(eventPlan.participantIds)).slice(0, 8);
   const participants = eventPlan.participantIds
     .map((id) => world.agents[id])
@@ -263,6 +275,7 @@ export async function summarizeSubEvent(world, eventPlan, llmConfig) {
       drives: agent.drives,
       beliefs: agent.beliefs.slice(-3),
       profile: agent.profile,
+      domain: agent.domain ?? {},
     }));
   const relations = relationMatrix(world, participantIds);
   const relatedHistory = participantRecentEvents(world, participantIds);
@@ -272,24 +285,36 @@ export async function summarizeSubEvent(world, eventPlan, llmConfig) {
     phase: world.time.phase,
     publicOpinion: world.publicOpinion,
     phaseBrief: world.metadata?.storyPhase ?? "",
+    schemas: {
+      character: world.metadata?.characterSchema ?? {},
+      world: world.metadata?.worldSchema ?? {},
+      publicAxes: world.metadata?.publicAxesSchema ?? {},
+    },
+  };
+
+  const frameworkConstraint = JSON.stringify({
+    world_assumptions: framework.world_assumptions ?? {},
+    style: framework.style ?? {},
+    sub_event_directives: framework.prompt_directives?.sub_event ?? [],
+  });
+  const subVars = {
+    eventPlan: JSON.stringify(eventPlan),
+    worldContext: JSON.stringify(worldContext),
+    participants: JSON.stringify(participants),
+    relations: JSON.stringify(relations),
+    relatedHistory: JSON.stringify(relatedHistory),
+    frameworkConstraint,
+    materialConstraint: buildMaterialConstraint(world),
   };
 
   const messages = [
     {
       role: "system",
-      content:
-        "你是次事件总结器。基于事件设定和多角色状态，给出事件总结、多角色互动张力与可见性。对话与互动长度按需要自然展开，不必强行冗长。只输出 JSON。",
+      content: resolvePromptText(framework, "prompts.sub_event.system", subVars),
     },
     {
       role: "user",
-      content: [
-        "输出 JSON: {\"event_summary\":\"...\",\"key_tensions\":[\"...\"],\"visibility\":0.0}",
-        `event_plan=${JSON.stringify(eventPlan)}`,
-        `world_context=${JSON.stringify(worldContext)}`,
-        `participants=${JSON.stringify(participants)}`,
-        `participant_relations=${JSON.stringify(relations)}`,
-        `participant_related_history=${JSON.stringify(relatedHistory)}`,
-      ].join("\n"),
+      content: resolvePromptLines(framework, "prompts.sub_event.user_lines", subVars).join("\n"),
     },
   ];
 

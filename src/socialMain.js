@@ -4,6 +4,15 @@ import { runHierarchicalSimulation } from "./social/hierarchicalEngine.js";
 import { writeHistoryDump } from "./social/historyDump.js";
 import { printSimulationReport } from "./social/reporter.js";
 import { createRedCliffInitialState } from "./social/seedRedCliff.js";
+import { bootstrapWorldFromSources } from "./social/worldBootstrap.js";
+
+function usingBootstrapMode() {
+  return Boolean(String(process.env.SIM_SOURCE_FILES ?? "").trim());
+}
+
+function bootstrapOnlyMode() {
+  return String(process.env.SIM_BOOTSTRAP_ONLY ?? "0") === "1";
+}
 
 try {
   const config = loadSocialConfig();
@@ -35,9 +44,53 @@ try {
   console.log(`SIM noise(decision/battle): ${config.randomness.decisionNoise}/${config.randomness.battleNoise}`);
   console.log(`SIM orchestration: ${config.orchestrationMode}`);
   console.log(`SIM db path: ${config.dbPath}`);
+  console.log(`SIM framework: ${config.frameworkPath} (${config.frameworkLoaded ? "loaded" : "default"})`);
+
+  let initial;
+  if (usingBootstrapMode()) {
+    const sourceFiles = String(process.env.SIM_SOURCE_FILES ?? "").trim();
+    const startNode = String(process.env.SIM_START_NODE ?? "").trim();
+    const boot = await bootstrapWorldFromSources(config, { sourceFiles, startNode });
+    initial = boot.world;
+    console.log(`SIM bootstrap: on (${boot.sourceFiles.length} files)`);
+    if (Array.isArray(boot.sourceFileEncodings) && boot.sourceFileEncodings.length > 0) {
+      const encPreview = boot.sourceFileEncodings
+        .slice(0, 8)
+        .map((item) => `${item.encoding}:${item.path}`)
+        .join(" | ");
+      console.log(`SIM bootstrap encodings: ${encPreview}`);
+    }
+    if (Array.isArray(boot.skippedEntries) && boot.skippedEntries.length > 0) {
+      console.log(`SIM bootstrap skipped entries: ${JSON.stringify(boot.skippedEntries)}`);
+    }
+    if (boot.selectedTimelineNode) {
+      console.log(`SIM start node: ${boot.selectedTimelineNode}`);
+    }
+    if (Array.isArray(boot.startNodeCandidates) && boot.startNodeCandidates.length > 0) {
+      const preview = boot.startNodeCandidates.slice(0, 8).map((item) => `${item.id || "?"}:${item.label || ""}`).join(" | ");
+      console.log(`SIM start node candidates: ${preview}`);
+    }
+    console.log(`SIM scenario id: ${boot.scenarioId}`);
+    console.log(`SIM bootstrap cache: ${boot.fromCache ? "hit" : "miss"}`);
+    if (boot.fromCache) {
+      console.log("SIM bootstrap ingest: reused cached world seed (no new bootstrap LLM extraction)");
+    } else if (boot.ingestStats) {
+      const st = boot.ingestStats;
+      console.log(`SIM bootstrap ingest chars: total=${st.totalChars} chunk_sent=${st.sentChunkChars} coverage=${st.coverage}`);
+      console.log(`SIM bootstrap ingest chunks: used=${st.usedChunks}/${st.maxChunks} possible=${st.possibleChunks}`);
+      console.log(`SIM bootstrap truncation: chunk=${st.chunkTruncated} sourceDigest=${st.sourceDigestTruncated} rawContext=${st.rawContextTruncated}`);
+    }
+
+    if (bootstrapOnlyMode()) {
+      console.log("SIM bootstrap-only: done (no simulation executed)");
+      process.exit(0);
+    }
+  } else {
+    initial = createRedCliffInitialState();
+    console.log("SIM bootstrap: off (using built-in Red Cliff seed)");
+  }
   console.log("");
 
-  const initial = createRedCliffInitialState();
   const started = Date.now();
   const result = config.orchestrationMode === "hierarchical"
     ? await runHierarchicalSimulation(initial, config)

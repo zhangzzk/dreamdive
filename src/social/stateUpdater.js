@@ -14,6 +14,17 @@ function randomBetween(randomFn, min, max) {
   return min + (max - min) * randomFn();
 }
 
+function getPublicAxis(world, candidates, fallback = 0.5) {
+  const opinion = world.publicOpinion && typeof world.publicOpinion === "object" ? world.publicOpinion : {};
+  for (const key of candidates) {
+    const value = Number(opinion[key]);
+    if (Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return fallback;
+}
+
 function isPersuasionAction(label) {
   return /consult|discuss|negot|convince|alliance|说服|劝|议|盟|会谈|协商/i.test(String(label ?? ""));
 }
@@ -80,11 +91,10 @@ function resolveBattleRoll(world, actorId, action, options) {
   const randomFn = options.randomFn ?? Math.random;
   const battleNoise = Number(options.randomness?.battleNoise ?? 0.2);
 
-  const actorMorale = world.publicOpinion.morale ?? 0.5;
-  const defenderMorale = world.publicOpinion.morale ?? 0.5;
+  const momentum = getPublicAxis(world, ["morale", "combat_morale", "stability", "order", "confidence"], 0.5);
 
-  const atkStrength = Math.log1p(actor.resources.troops) * (1 + actor.internalState.confidence * 0.25) * (0.7 + actorMorale * 0.3);
-  const defStrength = Math.log1p(defender.resources.troops) * (1 + defender.internalState.confidence * 0.22) * (0.7 + defenderMorale * 0.3);
+  const atkStrength = Math.log1p(actor.resources.troops) * (1 + actor.internalState.confidence * 0.25) * (0.7 + momentum * 0.3);
+  const defStrength = Math.log1p(defender.resources.troops) * (1 + defender.internalState.confidence * 0.22) * (0.7 + momentum * 0.3);
   const strengthGap = atkStrength - defStrength;
   const deterministic = sigmoid(strengthGap * 0.6);
   const stochastic = randomBetween(randomFn, -battleNoise, battleNoise);
@@ -141,22 +151,107 @@ function applyRelationDelta(agent, targetId, relationUpdate) {
   agent.relations[targetId].attraction = round2(clamp(agent.relations[targetId].attraction + relationUpdate.attraction_delta, -1, 1));
 }
 
+function normalizeOpinionKey(key) {
+  return String(key ?? "")
+    .trim()
+    .replace(/([a-z])([A-Z])/g, "$1_$2")
+    .replace(/\s+/g, "_")
+    .toLowerCase();
+}
+
+function toCamelKey(snake) {
+  return String(snake).replace(/_([a-z])/g, (_m, c) => c.toUpperCase());
+}
+
+function snapshotOpinion(opinion) {
+  const source = opinion && typeof opinion === "object" ? opinion : {};
+  const out = {};
+  for (const [key, value] of Object.entries(source)) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) {
+      continue;
+    }
+    out[normalizeOpinionKey(key)] = round2(num);
+  }
+  return out;
+}
+
 function applyPublicOpinionDelta(world, updates) {
-  world.publicOpinion.legitimacy = round2(clamp((world.publicOpinion.legitimacy ?? 0) + updates.legitimacy_delta, 0, 1));
-  world.publicOpinion.alliancePressure = round2(clamp((world.publicOpinion.alliancePressure ?? 0) + updates.alliance_pressure_delta, 0, 1));
-  world.publicOpinion.courtSuspicion = round2(clamp((world.publicOpinion.courtSuspicion ?? 0) + updates.court_suspicion_delta, 0, 1));
-  world.publicOpinion.morale = round2(clamp((world.publicOpinion.morale ?? 0) + updates.morale_delta, 0, 1));
+  const source = updates && typeof updates === "object" ? updates : {};
+  world.publicOpinion = world.publicOpinion && typeof world.publicOpinion === "object" ? world.publicOpinion : {};
+  for (const [rawKey, rawDelta] of Object.entries(source)) {
+    const deltaNum = Number(rawDelta);
+    if (!Number.isFinite(deltaNum) || deltaNum === 0) {
+      continue;
+    }
+    const normalized = normalizeOpinionKey(rawKey).replace(/_delta$/, "");
+    const camel = toCamelKey(normalized);
+    const preferredKey = Object.prototype.hasOwnProperty.call(world.publicOpinion, normalized)
+      ? normalized
+      : Object.prototype.hasOwnProperty.call(world.publicOpinion, camel)
+        ? camel
+        : normalized;
+    const current = Number(world.publicOpinion[preferredKey] ?? 0.5);
+    world.publicOpinion[preferredKey] = round2(clamp((Number.isFinite(current) ? current : 0.5) + deltaNum, 0, 1));
+  }
+}
+
+function getPathContainer(root, pathParts) {
+  let ref = root;
+  for (const key of pathParts.slice(0, -1)) {
+    if (!ref[key] || typeof ref[key] !== "object" || Array.isArray(ref[key])) {
+      ref[key] = {};
+    }
+    ref = ref[key];
+  }
+  return ref;
+}
+
+function applyDomainUpdates(world, updates) {
+  const list = Array.isArray(updates) ? updates : [];
+  for (const item of list) {
+    const target = world.agents[item?.id];
+    if (!target) {
+      continue;
+    }
+    target.domain = target.domain && typeof target.domain === "object" ? target.domain : {};
+    const containerName = String(item?.container ?? "extra").trim() || "extra";
+    if (!target.domain[containerName] || typeof target.domain[containerName] !== "object" || Array.isArray(target.domain[containerName])) {
+      target.domain[containerName] = {};
+    }
+    const key = String(item?.key ?? "").trim();
+    if (!key) {
+      continue;
+    }
+    const mode = String(item?.mode ?? (item?.value !== undefined ? "set" : "delta")).toLowerCase();
+    const parts = key.split(".").map((part) => part.trim()).filter(Boolean);
+    if (parts.length === 0) {
+      continue;
+    }
+    const holder = getPathContainer(target.domain[containerName], parts);
+    const leaf = parts[parts.length - 1];
+
+    if (mode === "remove" || mode === "delete") {
+      delete holder[leaf];
+      continue;
+    }
+
+    if (mode === "set" || !Number.isFinite(Number(item?.delta))) {
+      const value = item?.value;
+      holder[leaf] = typeof value === "number" ? round2(value) : value;
+      continue;
+    }
+
+    const current = Number(holder[leaf] ?? 0);
+    const delta = Number(item?.delta ?? 0);
+    holder[leaf] = round2((Number.isFinite(current) ? current : 0) + delta);
+  }
 }
 
 export function applyPlannedAction(world, actorId, action, options = {}) {
   const actor = world.agents[actorId];
   const stochasticDetails = [];
-  const opinionBefore = {
-    legitimacy: round2(world.publicOpinion.legitimacy ?? 0),
-    alliancePressure: round2(world.publicOpinion.alliancePressure ?? 0),
-    courtSuspicion: round2(world.publicOpinion.courtSuspicion ?? 0),
-    morale: round2(world.publicOpinion.morale ?? 0),
-  };
+  const opinionBefore = snapshotOpinion(world.publicOpinion);
 
   for (const relation of action.stateUpdates.relationUpdates) {
     const source = world.agents[relation.from];
@@ -204,12 +299,8 @@ export function applyPlannedAction(world, actorId, action, options = {}) {
   }
 
   applyPublicOpinionDelta(world, action.stateUpdates.publicOpinionUpdates);
-  const opinionAfter = {
-    legitimacy: round2(world.publicOpinion.legitimacy ?? 0),
-    alliancePressure: round2(world.publicOpinion.alliancePressure ?? 0),
-    courtSuspicion: round2(world.publicOpinion.courtSuspicion ?? 0),
-    morale: round2(world.publicOpinion.morale ?? 0),
-  };
+  applyDomainUpdates(world, action.stateUpdates.domainUpdates);
+  const opinionAfter = snapshotOpinion(world.publicOpinion);
 
   if (isPersuasionAction(action.actionLabel) && Array.isArray(action.targetIds) && action.targetIds.length > 0) {
     for (const targetId of action.targetIds) {
@@ -257,7 +348,13 @@ export function applyPlannedAction(world, actorId, action, options = {}) {
     dialogue: action.dialogue ?? [],
     consequences: [],
     visibility: round2(clamp(action.visibility ?? 0.6, 0, 1)),
-    importance: clamp(0.45 + Math.abs(action.stateUpdates.publicOpinionUpdates.morale_delta) + action.drivers.length * 0.04, 0, 1),
+    importance: clamp(
+      0.4
+        + Object.values(action.stateUpdates.publicOpinionUpdates ?? {}).reduce((sum, value) => sum + Math.abs(Number(value) || 0), 0)
+        + action.drivers.length * 0.04,
+      0,
+      1,
+    ),
     debug: {
       rationale: action.rationale,
       drivers: action.drivers,

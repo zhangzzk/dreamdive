@@ -14,8 +14,9 @@ import {
   writeSnapshot,
   writeSubEventChat,
 } from "./database.js";
+import { rolePriorityByKeywords } from "./framework.js";
 
-function buildPlanningContext(world, randomFn) {
+function buildPlanningContext(world, randomFn, framework) {
   const locationIndex = {};
   const factionLeaders = {};
 
@@ -27,7 +28,7 @@ function buildPlanningContext(world, randomFn) {
     locationIndex[location].push(agent.id);
 
     const faction = agent.identity.faction;
-    if (!factionLeaders[faction] && /(君主|吴主|丞相|将军)/.test(agent.identity.role)) {
+    if (!factionLeaders[faction] && rolePriorityByKeywords(agent.identity.role, framework) >= 0.16) {
       factionLeaders[faction] = agent.id;
     }
   }
@@ -266,7 +267,7 @@ export async function runHierarchicalSimulation(initialWorld, config) {
         async (event) => {
           const sub = await summarizeSubEvent(world, event, config.llm);
           const planningContext = {
-            ...buildPlanningContext(world, config.randomFn),
+            ...buildPlanningContext(world, config.randomFn, config.framework),
             currentEvent: {
               eventId: event.eventId,
               title: event.title,
